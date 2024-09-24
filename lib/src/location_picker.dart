@@ -16,6 +16,8 @@ import 'classes.dart';
 import 'widgets/copyright_osm_widget.dart';
 import 'widgets/wide_button.dart';
 
+import 'package:rxdart/rxdart.dart';
+
 /// Principal widget to show Flutter map using osm api with pick up location marker and search bar.
 /// you can track you current location, search for a location and select it.
 /// navigate easily in the map to selecte location.
@@ -330,6 +332,9 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   bool isLoading = true;
   late void Function(Exception e) onError;
 
+  final StreamController<Stream<(PickedData request, String? address)>> _dataStream = StreamController();
+  late StreamSubscription _dataSubscription;
+
   /// It returns true if the text is RTL, false if it's LTR
   ///
   /// Args:
@@ -429,17 +434,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   /// location.
   ///  address (String): The address parameter represents the current address of the location.
   void onLocationChanged({required latLng, String? address}) {
-    pickData(latLng).then(
-      (PickedData pickedData) {
-        if (widget.onChanged != null) widget.onChanged!(pickedData);
-        // These two lines, and the onError callback below are the replacement =
-        // for the entire setNameCurrentPos function.
-        _searchController.text = address ?? pickedData.address;
-        setState(() {});
-      },
-    ).onError<Exception>((error, stackTrace) {
-      onError(error);
-    });
+    _dataStream.sink.add(pickData(latLng).asStream().map((v) => (v, address)));
   }
 
   /// It takes the pointer of the map and sends a request to the OpenStreetMap API to get the address of
@@ -500,6 +495,19 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
         AnimationController(duration: widget.mapAnimationDuration, vsync: this);
     onError = widget.onError ?? (e) => debugPrint(e.toString());
 
+    _dataSubscription = SwitchLatestStream(_dataStream.stream)
+      .handleError((error) {
+        onError(error);
+      }, test: (v) => v is Exception)
+      .listen((v) {
+        final data = v.$1;
+        if (widget.onChanged != null) widget.onChanged!(data);
+        // These two lines, and the onError callback below are the replacement =
+        // for the entire setNameCurrentPos function.
+        _searchController.text = v.$2 ?? data.address;
+        setState(() {});
+      });
+
     /// Checking if the trackMyPosition is true or false. If it is true, it will get the current
     /// position of the user and set the initLate and initLong to the current position. If it is false,
     /// it will set the initLate and initLong to the [initPosition].latitude and
@@ -558,6 +566,7 @@ class _FlutterLocationPickerState extends State<FlutterLocationPicker>
   /// clean up resources
   @override
   void dispose() {
+    _dataSubscription.cancel();
     _mapController.dispose();
     _animationController.dispose();
     super.dispose();
